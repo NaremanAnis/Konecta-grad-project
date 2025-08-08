@@ -1,0 +1,38 @@
+pipeline {
+  agent any
+  environment {
+    AWS_REGION = 'us-east-1'
+    ECR_REGISTRY = "<ACCOUNT>.dkr.ecr.${AWS_REGION}.amazonaws.com"
+    IMAGE = "${ECR_REGISTRY}/counter-app:${env.BUILD_NUMBER}"
+  }
+  stages {
+    stage('Checkout') {
+      steps { checkout scm }
+    }
+    stage('Build Image') {
+      steps { sh 'docker build -t counter-app ./app' }
+    }
+    stage('Push to ECR') {
+      steps {
+        withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds']]) {
+          sh """
+            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+            docker tag counter-app:latest $IMAGE
+            docker push $IMAGE
+          """
+        }
+      }
+    }
+    stage('Deploy to EKS') {
+      steps {
+        script {
+          if (env.BRANCH_NAME == 'test') {
+            sh "kubectl --namespace=test set image deployment/counter-app counter=$IMAGE"
+          } else if (env.BRANCH_NAME == 'prod') {
+            sh "kubectl --namespace=prod set image deployment/counter-app counter=$IMAGE"
+          }
+        }
+      }
+    }
+  }
+}
