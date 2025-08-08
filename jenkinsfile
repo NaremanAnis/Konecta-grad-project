@@ -1,0 +1,70 @@
+pipeline {
+    agent any
+    
+    environment {
+        AWS_ACCOUNT_ID = credentials('aws-account-id')
+        AWS_ACCESS_KEY_ID = credentials('aws-access-key-id')
+        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-access-key')
+        ECR_REPO = "counter-app"
+        CLUSTER_NAME = "private-eks-cluster"
+        REGION = "us-east-1"
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    if (env.BRANCH_NAME == 'test') {
+                        docker.build("${ECR_REPO}:test")
+                    } else if (env.BRANCH_NAME == 'prod') {
+                        docker.build("${ECR_REPO}:prod")
+                    }
+                }
+            }
+        }
+        
+        stage('Login to ECR') {
+            steps {
+                sh "aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
+            }
+        }
+        
+        stage('Push to ECR') {
+            steps {
+                script {
+                    if (env.BRANCH_NAME == 'test') {
+                        sh "docker tag ${ECR_REPO}:test ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO}:test"
+                        sh "docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO}:test"
+                    } else if (env.BRANCH_NAME == 'prod') {
+                        sh "docker tag ${ECR_REPO}:prod ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO}:prod"
+                        sh "docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com/${ECR_REPO}:prod"
+                    }
+                }
+            }
+        }
+        
+        stage('Configure kubectl') {
+            steps {
+                sh "aws eks --region ${REGION} update-kubeconfig --name ${CLUSTER_NAME}"
+            }
+        }
+        
+        stage('Deploy to EKS') {
+            steps {
+                script {
+                    if (env.BRANCH_NAME == 'test') {
+                        sh "kubectl apply -f k8s/test/"
+                    } else if (env.BRANCH_NAME == 'prod') {
+                        sh "kubectl apply -f k8s/prod/"
+                    }
+                }
+            }
+        }
+    }
+}
